@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Machine Health Monitor</title>
+  <style>
+    :root { color-scheme: dark; --bg:#101416; --panel:#171d20; --line:#2d373c; --text:#f1f5f2; --muted:#98a6a1; --green:#45d483; --amber:#f4ba4b; --red:#ff6b61; --blue:#61aefc; }
+    * { box-sizing: border-box; }
+    body { margin:0; min-height:100vh; background:var(--bg); color:var(--text); font:14px/1.45 system-ui,-apple-system,sans-serif; letter-spacing:0; }
+    header { height:60px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; padding:0 28px; }
+    .brand { display:flex; align-items:center; gap:12px; font-weight:700; font-size:16px; }
+    .mark { width:25px; height:25px; display:grid; place-items:center; background:var(--green); color:#07130d; border-radius:4px; }
+    .connection { color:var(--muted); display:flex; align-items:center; gap:8px; }
+    .dot { width:8px; height:8px; border-radius:50%; background:var(--amber); }
+    .dot.live { background:var(--green); box-shadow:0 0 0 4px #45d4831f; }
+    main { width:min(1240px, calc(100% - 40px)); margin:26px auto; }
+    .topline { display:flex; justify-content:space-between; align-items:end; margin-bottom:18px; }
+    h1 { margin:0; font-size:24px; letter-spacing:0; }
+    .timestamp { color:var(--muted); }
+    .grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:12px; }
+    .panel { border:1px solid var(--line); background:var(--panel); border-radius:7px; padding:18px; min-width:0; }
+    .metric-label { color:var(--muted); font-size:12px; text-transform:uppercase; font-weight:700; }
+    .metric { font-size:28px; font-weight:750; margin-top:8px; overflow-wrap:anywhere; }
+    .unit { color:var(--muted); font-size:14px; font-weight:500; }
+    .status-normal { color:var(--green); } .status-fault { color:var(--red); }
+    .wide { grid-column:span 2; }
+    .chart { height:220px; position:relative; margin-top:14px; }
+    canvas { width:100%; height:100%; display:block; }
+    .prob-row { display:grid; grid-template-columns:110px 1fr 50px; align-items:center; gap:10px; margin:14px 0; }
+    .track { height:8px; background:#293136; border-radius:2px; overflow:hidden; }
+    .fill { height:100%; background:var(--blue); transition:width .25s ease; }
+    .events { grid-column:span 4; padding:0; overflow:hidden; }
+    table { width:100%; border-collapse:collapse; table-layout:fixed; }
+    th,td { padding:12px 16px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    th { color:var(--muted); font-size:11px; text-transform:uppercase; }
+    tr:last-child td { border-bottom:0; }
+    @media (max-width:850px) { .grid{grid-template-columns:repeat(2,1fr)} .events{grid-column:span 2} }
+    @media (max-width:540px) { header{padding:0 16px} main{width:calc(100% - 24px)} .grid{grid-template-columns:1fr} .wide,.events{grid-column:span 1} .metric{font-size:24px} }
+  </style>
+</head>
+<body>
+  <header><div class="brand"><span class="mark">M</span>Machine Health Monitor</div><div class="connection"><span id="dot" class="dot"></span><span id="connection">Waiting for telemetry</span></div></header>
+  <main>
+    <div class="topline"><div><h1>Edge inference overview</h1><div class="timestamp">ESP32-S3 / MPU6050</div></div><div id="updated" class="timestamp">No samples</div></div>
+    <section class="grid">
+      <article class="panel"><div class="metric-label">Machine state</div><div id="state" class="metric">Offline</div></article>
+      <article class="panel"><div class="metric-label">Confidence</div><div id="confidence" class="metric">--</div></article>
+      <article class="panel"><div class="metric-label">Vibration RMS</div><div id="rms" class="metric">-- <span class="unit">g</span></div></article>
+      <article class="panel"><div class="metric-label">Inference</div><div id="latency" class="metric">-- <span class="unit">ms</span></div></article>
+      <article class="panel wide"><div class="metric-label">Vibration trend</div><div class="chart"><canvas id="trend"></canvas></div></article>
+      <article class="panel wide"><div class="metric-label">Class probabilities</div><div id="probabilities"></div></article>
+      <article class="panel events"><table><thead><tr><th>Time</th><th>Prediction</th><th>Confidence</th><th>RMS</th><th>Device</th></tr></thead><tbody id="events"></tbody></table></article>
+    </section>
+  </main>
+  <script>
+    const history=[]; const labels=['normal','imbalance','misalignment','bearing_fault'];
+    const pretty=s=>s.replaceAll('_',' ').replace(/\b\w/g,c=>c.toUpperCase());
+    function draw(){ const c=document.querySelector('#trend'),d=devicePixelRatio||1,r=c.getBoundingClientRect(); c.width=r.width*d;c.height=r.height*d;const x=c.getContext('2d');x.scale(d,d);x.clearRect(0,0,r.width,r.height);x.strokeStyle='#2d373c';x.lineWidth=1;for(let i=0;i<5;i++){let y=10+i*(r.height-20)/4;x.beginPath();x.moveTo(0,y);x.lineTo(r.width,y);x.stroke()}if(history.length<2)return;const max=Math.max(.1,...history);x.strokeStyle='#45d483';x.lineWidth=2;x.beginPath();history.forEach((v,i)=>{let px=i*r.width/59,py=r.height-10-(v/max)*(r.height-20);i?x.lineTo(px,py):x.moveTo(px,py)});x.stroke()}
+    function update(p){ history.push(p.rms_g);if(history.length>60)history.shift();draw();const fault=p.prediction!=='normal';const s=document.querySelector('#state');s.textContent=pretty(p.prediction);s.className='metric '+(fault?'status-fault':'status-normal');document.querySelector('#confidence').textContent=(p.confidence*100).toFixed(1)+'%';document.querySelector('#rms').innerHTML=p.rms_g.toFixed(3)+' <span class="unit">g</span>';document.querySelector('#latency').innerHTML=p.inference_ms.toFixed(2)+' <span class="unit">ms</span>';document.querySelector('#updated').textContent='Updated '+new Date(p.timestamp*1000).toLocaleTimeString();document.querySelector('#probabilities').innerHTML=labels.map(k=>{const v=p.probabilities[k]||0;return `<div class="prob-row"><span>${pretty(k)}</span><div class="track"><div class="fill" style="width:${v*100}%"></div></div><span>${(v*100).toFixed(0)}%</span></div>`}).join('');const row=document.createElement('tr');row.innerHTML=`<td>${new Date(p.timestamp*1000).toLocaleTimeString()}</td><td>${pretty(p.prediction)}</td><td>${(p.confidence*100).toFixed(1)}%</td><td>${p.rms_g.toFixed(3)} g</td><td>${p.device_id}</td>`;const body=document.querySelector('#events');body.prepend(row);while(body.children.length>8)body.lastChild.remove()}
+    async function init(){try{(await fetch('/api/history').then(r=>r.json())).slice(-60).forEach(update)}catch(e){}connect()}
+    function connect(){const ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);ws.onopen=()=>{document.querySelector('#dot').classList.add('live');document.querySelector('#connection').textContent='Live'};ws.onmessage=e=>update(JSON.parse(e.data));ws.onclose=()=>{document.querySelector('#dot').classList.remove('live');document.querySelector('#connection').textContent='Reconnecting';setTimeout(connect,1500)}}
+    addEventListener('resize',draw);init();
+  </script>
+</body>
+</html>
+

@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+data/raw/*.csv
+data/processed/*.npz
+artifacts/*.joblib
+artifacts/*.json
+artifacts/*.png
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!artifacts/.gitkeep
+.DS_Store
+.pio/
+.platformio/
