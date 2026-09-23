@@ -30,6 +30,15 @@ def build_parser() -> argparse.ArgumentParser:
     simulate.add_argument("--url", default="http://127.0.0.1:8000/api/telemetry")
     simulate.add_argument("--interval", type=float, default=0.5)
 
+    board_benchmark = subparsers.add_parser(
+        "board-benchmark", help="evaluate the model through a virtual MPU6050 signal path"
+    )
+    board_benchmark.add_argument("--samples-per-class", type=int, default=250)
+    board_benchmark.add_argument("--seed", type=int, default=2026)
+    board_benchmark.add_argument(
+        "--output", type=Path, default=ARTIFACT_DIR / "board_simulation.json"
+    )
+
     serial = subparsers.add_parser("serial", help="bridge ESP32 JSON serial output to dashboard")
     serial.add_argument("--port", required=True)
     serial.add_argument("--url", default="http://127.0.0.1:8000/api/telemetry")
@@ -62,6 +71,12 @@ def main() -> None:
     elif args.command == "simulate":
         from .simulator import run_telemetry_simulator
         run_telemetry_simulator(args.url, args.interval)
+    elif args.command == "board-benchmark":
+        from .simulator import benchmark_board_simulation
+        metrics = benchmark_board_simulation(args.samples_per_class, args.seed)
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(metrics, indent=2) + "\n")
+        print(json.dumps(metrics, indent=2))
     elif args.command == "serial":
         from .serial_bridge import run_serial_bridge
         run_serial_bridge(args.port, args.url, args.baud)
@@ -69,4 +84,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

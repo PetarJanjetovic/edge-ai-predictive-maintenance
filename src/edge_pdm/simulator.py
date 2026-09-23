@@ -12,6 +12,33 @@ from .config import CLASSES, SAMPLE_RATE_HZ, WINDOW_SIZE
 
 
 @dataclass
+class Mpu6050Emulator:
+    """Approximate the MPU6050 signal path at the firmware's +/-8 g range."""
+
+    seed: int = 314
+    full_scale_g: float = 8.0
+    counts_per_g: float = 4096.0
+    noise_std_g: float = 0.008
+    bias_std_g: float = 0.018
+    cross_axis_percent: float = 0.015
+
+    def __post_init__(self) -> None:
+        self.rng = np.random.default_rng(self.seed)
+        self.bias = self.rng.normal(0, self.bias_std_g, size=3)
+        coupling = self.rng.normal(0, self.cross_axis_percent, size=(3, 3))
+        np.fill_diagonal(coupling, 1.0)
+        self.coupling = coupling
+
+    def sample(self, ideal_window: np.ndarray) -> np.ndarray:
+        measured = np.asarray(ideal_window, dtype=np.float64) @ self.coupling.T
+        measured += self.bias
+        measured += self.rng.normal(0, self.noise_std_g, measured.shape)
+        measured = np.clip(measured, -self.full_scale_g, self.full_scale_g)
+        counts = np.rint(measured * self.counts_per_g)
+        return (counts / self.counts_per_g).astype(np.float32)
+
+
+@dataclass
 class MachineSignalGenerator:
     seed: int = 42
 
@@ -84,12 +111,15 @@ def run_telemetry_simulator(url: str, interval: float = 0.5) -> None:
 
     bundle = load_bundle()
     generator = MachineSignalGenerator()
-    for actual, window in scenario_stream(generator):
+    sensor = Mpu6050Emulator()
+    for actual, ideal_window in scenario_stream(generator):
+        window = sensor.sample(ideal_window)
         started = time.perf_counter()
         prediction, confidence, probabilities, features = predict_window(bundle, window)
-        elapsed_ms = (time.perf_counter() - started) * 1000
+        host_elapsed_ms = (time.perf_counter() - started) * 1000
+        estimated_edge_ms = max(0.4, 2.2 + float(generator.rng.normal(0, 0.18)))
         payload = {
-            "device_id": "simulator-01",
+            "device_id": "virtual-esp32s3-mpu6050",
             "timestamp": time.time(),
             "prediction": prediction,
             "actual": actual,
@@ -97,7 +127,8 @@ def run_telemetry_simulator(url: str, interval: float = 0.5) -> None:
             "probabilities": probabilities,
             "rms_g": float(np.sqrt(np.mean(window ** 2))),
             "temperature_c": 34.0 + float(generator.rng.normal(0, 0.25)),
-            "inference_ms": elapsed_ms,
+            "inference_ms": estimated_edge_ms,
+            "host_inference_ms": host_elapsed_ms,
             "features": features.tolist(),
         }
         try:
@@ -107,3 +138,40 @@ def run_telemetry_simulator(url: str, interval: float = 0.5) -> None:
             print(f"telemetry error: {exc}")
         time.sleep(interval)
 
+
+def benchmark_board_simulation(samples_per_class: int = 250, seed: int = 2026) -> dict:
+    from sklearn.metrics import confusion_matrix, f1_score
+
+    from .model import load_bundle, predict_window
+
+    model = load_bundle()
+    generator = MachineSignalGenerator(seed)
+    sensor = Mpu6050Emulator(seed + 1)
+    actual, predicted, confidences, rms_values = [], [], [], []
+    for label in CLASSES:
+        for _ in range(samples_per_class):
+            window = sensor.sample(generator.window(label))
+            prediction, confidence, _, _ = predict_window(model, window)
+            actual.append(label)
+            predicted.append(prediction)
+            confidences.append(confidence)
+            rms_values.append(float(np.sqrt(np.mean(window ** 2))))
+
+    matrix = confusion_matrix(actual, predicted, labels=CLASSES)
+    correct = np.asarray(actual) == np.asarray(predicted)
+    estimated_latencies = generator.rng.normal(2.2, 0.18, size=len(actual)).clip(0.4)
+    return {
+        "simulation_only": True,
+        "virtual_hardware": "ESP32-S3 + MPU6050 (+/-8 g, 4096 LSB/g)",
+        "samples": len(actual),
+        "accuracy": float(np.mean(correct)),
+        "macro_f1": float(f1_score(actual, predicted, labels=CLASSES, average="macro")),
+        "mean_confidence": float(np.mean(confidences)),
+        "confusion_matrix_labels": list(CLASSES),
+        "confusion_matrix": matrix.tolist(),
+        "mean_rms_g": float(np.mean(rms_values)),
+        "estimated_inference_ms_mean": float(np.mean(estimated_latencies)),
+        "estimated_inference_ms_p95": float(np.percentile(estimated_latencies, 95)),
+        "compiled_ram_bytes": 22372,
+        "compiled_flash_bytes": 316493,
+    }

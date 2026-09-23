@@ -68,6 +68,7 @@ edge-pdm train
 edge-pdm evaluate
 edge-pdm dashboard --port 8000
 edge-pdm simulate --url http://127.0.0.1:8000/api/telemetry
+edge-pdm board-benchmark --samples-per-class 250
 edge-pdm serial --port /dev/cu.usbmodemXXXX
 ```
 
@@ -101,6 +102,12 @@ The firmware emits one JSON object per inference window. Use the serial bridge t
 - Total model and preprocessing memory under 100 KB
 - False-alarm rate below 2% during a 30-minute healthy run
 - Stable operation for at least one hour
+
+## Virtual hardware mode
+
+The telemetry simulator passes each ideal machine signal through an MPU6050 emulator before inference. It adds fixed sensor bias, white measurement noise, cross-axis coupling, clipping at the configured +/-8 g range, and 4096 LSB/g quantization. Run `edge-pdm board-benchmark` for a repeatable virtual-board report.
+
+These figures estimate expected behavior and are useful for software integration. They are not substitutes for measurements from a physical sensor, motor, or ESP32.
 
 ## Responsible claims
 
